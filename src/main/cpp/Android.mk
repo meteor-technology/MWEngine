@@ -112,7 +112,6 @@ ifeq ($(MW_BUILD_TYPE),test)
     LOCAL_LDFLAGS          := -fPIE -pie
     LOCAL_MODULE           := mwengine_unittest
     LOCAL_SRC_FILES        := tests/main.cpp
-    LOCAL_SHARED_LIBRARIES := mwengine_test
     LOCAL_STATIC_LIBRARIES := googletest_main
     include $(BUILD_EXECUTABLE)
 
