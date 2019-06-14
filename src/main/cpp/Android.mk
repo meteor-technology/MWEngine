@@ -100,7 +100,7 @@ ifeq ($(BUILD_AAUDIO),true)
     LOCAL_LDLIBS := -laaudio
 endif
 
-LOCAL_LDLIBS += -lOpenSLES -landroid -latomic -llog
+LOCAL_LDLIBS += -lOpenSLES -landroid -latomic -llog -lmediandk
 
 include $(BUILD_SHARED_LIBRARY)
 

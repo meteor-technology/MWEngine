@@ -28,85 +28,97 @@
 #include <stdio.h>
 #include <definitions/notifications.h>
 #include <messaging/notifier.h>
+#include <sys/time.h>
+
+// whether to include JNI classes to add the Java bridge
+
+#ifdef USE_JNI
+
+#include <jni.h>
+#include <jni/javabridge.h>
+#include <media/NdkMediaCodec.h>
+
+#endif
 
 namespace MWEngine {
-namespace DiskWriter
-{
-    std::string               outputFile;
-    std::string               tempDirectory;
-    std::vector<writtenFile>  outputFiles;
-    std::vector<AudioBuffer*> cachedBuffers{ nullptr, nullptr };
+    namespace DiskWriter {
+        std::string outputFile;
+        std::string tempDirectory;
+        std::vector<writtenFile> outputFiles;
+        std::vector<AudioBuffer *> cachedBuffers{nullptr, nullptr};
 
-    int recordingChunkSize     = 0;
-    int outputWriterIndex      = 0;
-    int currentBufferIndex     = 0;
-    int savedSnippets          = 0;
-    int recordingChannelAmount = AudioEngineProps::OUTPUT_CHANNELS;
+        int recordingChunkSize = 0;
+        int outputWriterIndex = 0;
+        int currentBufferIndex = 0;
+        int savedSnippets = 0;
+        int recordingChannelAmount = AudioEngineProps::OUTPUT_CHANNELS;
 
-    bool prepared = false;
+        bool prepared = false;
 
-    void prepare( std::string outputFilename, int chunkSize, int amountOfChannels )
-    {
-        outputFile = outputFilename;
+        double gettimeofday_sec() {
+          struct timeval tv;
+          gettimeofday(&tv, NULL);
+          return tv.tv_sec + tv.tv_usec * 1e-6;
+        }
 
-        std::string path   = std::string( outputFilename );
-        std::size_t dirPos = path.find_last_of( "/" );
-        tempDirectory      = path.substr( 0, dirPos ) + "/";
+        void prepare(std::string outputFilename, int chunkSize, int amountOfChannels) {
+          outputFile = outputFilename;
 
-        recordingChunkSize     = chunkSize;
-        recordingChannelAmount = amountOfChannels;
-        savedSnippets          = 0;
+          std::string path = std::string(outputFilename);
+          std::size_t dirPos = path.find_last_of("/");
+          tempDirectory = path.substr(0, dirPos) + "/";
 
-        outputFiles.clear();
-        prepareSnippet();
+          recordingChunkSize = chunkSize;
+          recordingChannelAmount = amountOfChannels;
+          savedSnippets = 0;
 
-        prepared = true;
-    }
+          outputFiles.clear();
+          prepareSnippet();
 
-    void prepareSnippet()
-    {
-        // swap the currently active buffer
-        currentBufferIndex = ( currentBufferIndex == 0 ) ? 1 : 0;
-        generateOutputBuffer( currentBufferIndex, recordingChannelAmount );
-    }
+          prepared = true;
+        }
 
-    bool finish()
-    {
-        if ( !prepared )
+        void prepareSnippet() {
+          // swap the currently active buffer
+          currentBufferIndex = (currentBufferIndex == 0) ? 1 : 0;
+          generateOutputBuffer(currentBufferIndex, recordingChannelAmount);
+        }
+
+        bool finish() {
+          if (!prepared)
             return false;
 
-        // flush all temporary buffers as recording has finished
-        // and snippets have been written onto disk
+          // flush all temporary buffers as recording has finished
+          // and snippets have been written onto disk
 
-        for ( int i = 0; i < 2; ++i )
-            flushOutput( i );
+          for (int i = 0; i < 2; ++i)
+            flushOutput(i);
 
-        if ( outputFiles.size() == 0 )
+          if (outputFiles.size() == 0)
             return false;
 
-        // calculate total data size of concatenated wave files
+          // calculate total data size of concatenated wave files
 
-        size_t totalBufferSize = 0;
+          size_t totalBufferSize = 0;
 
-        for ( std::size_t i = 0; i < outputFiles.size(); ++i )
-            totalBufferSize += outputFiles.at( i ).size;
+          for (std::size_t i = 0; i < outputFiles.size(); ++i)
+            totalBufferSize += outputFiles.at(i).size;
 
-        // create a stream for writing the output file to
+          // create a stream for writing the output file to
 
-        std::ofstream waveStream = WaveWriter::createWAVStream(
+          std::ofstream waveStream = WaveWriter::createWAVStream(
             outputFile.c_str(), totalBufferSize,
             AudioEngineProps::SAMPLE_RATE, recordingChannelAmount
-        );
+          );
 
-        // concatenate the wave files into a single output file
+          // concatenate the wave files into a single output file
 
-        while ( outputFiles.size() > 0 )
-        {
-            writtenFile file = outputFiles.at( 0 );
+          while (outputFiles.size() > 0) {
+            writtenFile file = outputFiles.at(0);
 
             // read WAV data from file
 
-            AudioBuffer* tempBuffer = WaveReader::fileToBuffer( file.path ).buffer;
+            AudioBuffer *tempBuffer = WaveReader::fileToBuffer(file.path).buffer;
 
             // delete the source WAV file so we immediately free storage space for
             // writing the buffer contents into the single file output stream,
@@ -114,191 +126,287 @@ namespace DiskWriter
             // as the original recording is now gone!! then again, if it has errors
             // than the original recording isn't worth keeping anyways... ;)
 
-            remove( file.path.c_str() );
+            remove(file.path.c_str());
 
-            if ( tempBuffer != nullptr ) {
+            if (tempBuffer != nullptr) {
 
-                // convert data to a temporary PCM buffer
-                // TODO: can we just extract the existing PCM data without this
-                // back-and-forth conversion?
-                short int* outputBuffer = WaveWriter::bufferToPCM( tempBuffer );
+              // convert data to a temporary PCM buffer
+              // TODO: can we just extract the existing PCM data without this
+              // back-and-forth conversion?
+              short int *outputBuffer = WaveWriter::bufferToPCM(tempBuffer);
 
-                delete tempBuffer; // free memory allocated to read WAV file
+              delete tempBuffer; // free memory allocated to read WAV file
 
-                // write PCM buffer into the output stream
+              // write PCM buffer into the output stream
 
-                WaveWriter::appendBufferToStream( waveStream, outputBuffer, file.size );
+              WaveWriter::appendBufferToStream(waveStream, outputBuffer, file.size);
 
-                delete[] outputBuffer; // free memory allocated to the temporary PCM buffer
+              delete[] outputBuffer; // free memory allocated to the temporary PCM buffer
             }
 
             // remove from vector, iterate onto next
 
-            outputFiles.erase( outputFiles.begin() );
+            outputFiles.erase(outputFiles.begin());
+          }
+          waveStream.close();
+
+          prepared = false;
+
+          return true;
         }
-        waveStream.close();
 
-        prepared = false;
+        /**
+         * allocates a new buffer for writing the next snippet
+         */
+        AudioBuffer *generateOutputBuffer(int bufferIndex, int amountOfChannels) {
+          flushOutput(bufferIndex); // free previous contents when existing
 
-        return true;
-    }
+          if ((bufferIndex + 1) > cachedBuffers.size())
+            cachedBuffers.resize((unsigned long) (bufferIndex + 1));
 
-    /**
-     * allocates a new buffer for writing the next snippet
-     */
-    AudioBuffer* generateOutputBuffer( int bufferIndex, int amountOfChannels )
-    {
-        flushOutput( bufferIndex ); // free previous contents when existing
+          AudioBuffer *out = new AudioBuffer(amountOfChannels, recordingChunkSize);
 
-        if (( bufferIndex + 1 ) > cachedBuffers.size())
-            cachedBuffers.resize(( unsigned long )( bufferIndex + 1 ));
+          cachedBuffers.at((unsigned long) bufferIndex) = out;
+          outputWriterIndex = 0;
 
-        AudioBuffer* out = new AudioBuffer( amountOfChannels, recordingChunkSize );
-
-        cachedBuffers.at(( unsigned long ) bufferIndex ) = out;
-        outputWriterIndex = 0;
-
-        return out;
-    }
-
-    /**
-     * appends an AudioBuffer into the current snippets output buffer
-     */
-    void appendBuffer( AudioBuffer* aBuffer )
-    {
-        if ( !prepared )
-            return;
-
-        int bufferSize    = aBuffer->bufferSize;
-        int channelAmount = aBuffer->amountOfChannels;
-
-        AudioBuffer* cachedBuffer = getCachedBuffer( currentBufferIndex );
-
-        if ( cachedBuffer == nullptr )
-            cachedBuffer = generateOutputBuffer( currentBufferIndex, channelAmount );
-
-        cachedBuffer->mergeBuffers( aBuffer, 0, outputWriterIndex, 1.0f );
-        outputWriterIndex += bufferSize;
-    }
-
-    /**
-     * append the actual output buffer from the engine
-     * into the current snippets output buffer
-     */
-    void appendBuffer( float* aBuffer, int aBufferSize, int amountOfChannels )
-    {
-        if ( !prepared )
-            return;
-
-        AudioBuffer* cachedBuffer = getCachedBuffer( currentBufferIndex );
-
-        if ( cachedBuffer == nullptr )
-            cachedBuffer = generateOutputBuffer( currentBufferIndex, amountOfChannels );
-
-        int i, c, ci;
-
-        // write samples into cache buffers
-
-        for ( i = 0, c = 0; i < aBufferSize; ++i, ++outputWriterIndex, c += amountOfChannels )
-        {
-            if ( outputWriterIndex == recordingChunkSize )
-                return;
-
-            for ( ci = 0; ci < amountOfChannels; ++ci )
-                cachedBuffer->getBufferForChannel( ci )[ outputWriterIndex ] = aBuffer[ c + ci ];
+          return out;
         }
-    }
 
-    /**
-     * checks whether the current write buffer is full
-     */
-    bool bufferFull()
-    {
-        return outputWriterIndex >= recordingChunkSize;
-    }
-
-    /**
-     * write the contents of the write buffer into
-     * an output file, this will only write content
-     * up until the point if was written to in case
-     * the buffer wasn't full yet
-     */
-    void writeBufferToFile( int bufferIndex, bool broadcastUpdate )
-    {
-        if ( !prepared )
+        /**
+         * appends an AudioBuffer into the current snippets output buffer
+         */
+        void appendBuffer(AudioBuffer *aBuffer) {
+          if (!prepared)
             return;
 
-        AudioBuffer* cachedBuffer = getCachedBuffer( bufferIndex );
+          int bufferSize = aBuffer->bufferSize;
+          int channelAmount = aBuffer->amountOfChannels;
 
-        if ( cachedBuffer == nullptr )
+          AudioBuffer *cachedBuffer = getCachedBuffer(currentBufferIndex);
+
+          if (cachedBuffer == nullptr)
+            cachedBuffer = generateOutputBuffer(currentBufferIndex, channelAmount);
+
+          cachedBuffer->mergeBuffers(aBuffer, 0, outputWriterIndex, 1.0f);
+          outputWriterIndex += bufferSize;
+        }
+
+        /**
+         * append the actual output buffer from the engine
+         * into the current snippets output buffer
+         */
+        void appendBuffer(float *aBuffer, int aBufferSize, int amountOfChannels) {
+          if (!prepared)
             return;
 
-        int sampleRate = AudioEngineProps::SAMPLE_RATE;
+          AudioBuffer *cachedBuffer = getCachedBuffer(currentBufferIndex);
 
-        // create output file name
-        std::string outputFile = std::string(
+          if (cachedBuffer == nullptr)
+            cachedBuffer = generateOutputBuffer(currentBufferIndex, amountOfChannels);
+
+          int i, c, ci;
+
+          // write samples into cache buffers
+
+          for (i = 0, c = 0; i < aBufferSize; ++i, ++outputWriterIndex, c += amountOfChannels) {
+            if (outputWriterIndex == recordingChunkSize)
+              return;
+
+            for (ci = 0; ci < amountOfChannels; ++ci)
+              cachedBuffer->getBufferForChannel(ci)[outputWriterIndex] = aBuffer[c + ci];
+          }
+        }
+
+        /**
+         * checks whether the current write buffer is full
+         */
+        bool bufferFull() {
+          return outputWriterIndex >= recordingChunkSize;
+        }
+
+        /**
+         * write the contents of the write buffer into
+         * an output file, this will only write content
+         * up until the point if was written to in case
+         * the buffer wasn't full yet
+         */
+        void writeBufferToFile(int bufferIndex, bool broadcastUpdate) {
+          if (!prepared)
+            return;
+
+          AudioBuffer *cachedBuffer = getCachedBuffer(bufferIndex);
+
+          if (cachedBuffer == nullptr)
+            return;
+
+          int sampleRate = AudioEngineProps::SAMPLE_RATE;
+
+          // create output file name
+          std::string outputFile = std::string(
             tempDirectory.c_str()
-        ).append( "rec_snippet_" + SSTR( savedSnippets ) + ".WAV" );
+          ).append("rec_snippet_" + SSTR(savedSnippets) + ".WAV");
 
-        int bufferSize        = recordingChunkSize;
-        size_t writtenWAVSize = 0;
+          int bufferSize = recordingChunkSize;
+          size_t writtenWAVSize = 0;
 
-        // recorded less than maximum available in buffer ? cut silence
-        // by writing recording into temporary buffers
+          // recorded less than maximum available in buffer ? cut silence
+          // by writing recording into temporary buffers
 
-        if ( outputWriterIndex < bufferSize )
-        {
+          if (outputWriterIndex < bufferSize) {
             bufferSize = outputWriterIndex;
 
-            AudioBuffer* tempBuffer = new AudioBuffer( recordingChannelAmount, bufferSize );
+            AudioBuffer *tempBuffer = new AudioBuffer(recordingChannelAmount, bufferSize);
 
-            for ( int i = 0; i < bufferSize; ++i )
-            {
-                for ( int c = 0; c < recordingChannelAmount; ++c )
-                    tempBuffer->getBufferForChannel( c )[ i ] = cachedBuffer->getBufferForChannel( c )[ i ];
+            for (int i = 0; i < bufferSize; ++i) {
+              for (int c = 0; c < recordingChannelAmount; ++c)
+                tempBuffer->getBufferForChannel(c)[i] = cachedBuffer->getBufferForChannel(
+                  c)[i];
             }
-            writtenWAVSize = WaveWriter::bufferToWAV( outputFile, tempBuffer, sampleRate );
+            writtenWAVSize = WaveWriter::bufferToWAV(outputFile, tempBuffer, sampleRate);
 
             // free memory allocated by temporary buffer
 
             delete tempBuffer;
+          } else {
+            writtenWAVSize = WaveWriter::bufferToWAV(outputFile, cachedBuffer, sampleRate);
+          }
+
+          flushOutput(bufferIndex); // free allocated buffer memory
+
+          // store output file in vector
+          writtenFile file;
+          file.path = outputFile;
+          file.size = writtenWAVSize;
+          outputFiles.push_back(file);
+
+          // broadcast update
+          if (broadcastUpdate)
+            Notifier::broadcast(Notifications::RECORDED_SNIPPET_SAVED, savedSnippets);
+
+          ++savedSnippets;
         }
-        else
-        {
-            writtenWAVSize = WaveWriter::bufferToWAV( outputFile, cachedBuffer, sampleRate );
+
+        /**
+         * casfmのために追加
+         * MediaCodecを呼び出し、AudioBufferからAACへ変換
+         */
+        void writeBufferToMediaCodec(int bufferIndex, bool broadcastUpdate) {
+          if (!prepared)
+            return;
+
+          AudioBuffer *cachedBuffer = getCachedBuffer(bufferIndex);
+
+          if (cachedBuffer == nullptr)
+            return;
+
+          // MediaCodec初期化
+          AMediaCodec *codec = AMediaCodec_createEncoderByType("audio/mp4a-latm");
+
+          if (codec != nullptr) {
+            // fill the format
+            AMediaFormat *format = AMediaFormat_new();
+            if (format != nullptr) {
+
+              ANativeWindow *surface = nullptr;
+              AMediaCrypto *crypto = nullptr;
+
+              uint32_t flags = AMEDIACODEC_CONFIGURE_FLAG_ENCODE;
+
+              int32_t channelCount = 1;
+              int32_t bitRate = 128000;
+              int32_t channelMask = 16; // AudioFormat.CHANNEL_IN_MONO
+              int32_t inputSize = 1024 * 500;
+              int32_t profile = 2;// MediaCodecInfo.CodecProfileLevel.AACObjectLC
+
+
+              AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, "audio/mp4a-latm");
+              AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_CHANNEL_MASK, channelMask);
+              AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, bitRate);
+              AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_CHANNEL_COUNT, channelCount);
+              AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, inputSize);
+              AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_AAC_PROFILE, profile);
+
+              media_status_t rc = AMediaCodec_configure(codec, format, surface, crypto,
+                                                        flags);
+              if (AMEDIA_OK == rc) {
+                AMediaCodec_start(codec);
+              }
+            }
+          }
+
+          int sampleRate = AudioEngineProps::SAMPLE_RATE;
+
+          int bufferSize = recordingChunkSize;
+
+          // recorded less than maximum available in buffer ? cut silence
+          // by writing recording into temporary buffers
+
+          ssize_t bufidx = -1;
+          bufidx = AMediaCodec_dequeueInputBuffer(codec, 2000);
+          if (outputWriterIndex < bufferSize) {
+            bufferSize = outputWriterIndex;
+            AudioBuffer *tempBuffer = new AudioBuffer(recordingChannelAmount, bufferSize);
+
+            for (
+              int i = 0;
+              i < bufferSize;
+              ++i) {
+              for (
+                int c = 0;
+                c < recordingChannelAmount;
+                ++c)
+                tempBuffer->
+                  getBufferForChannel(c)[i] = cachedBuffer->getBufferForChannel(c)[i];
+            }
+            if (bufidx >= 0) {
+              size_t bufsize;
+              auto buf = AMediaCodec_getInputBuffer(codec, bufidx, &bufsize);
+              memcpy(buf, tempBuffer, bufferSize);
+              auto curTime = gettimeofday_sec();
+              AMediaCodec_queueInputBuffer(codec, bufidx, 0, bufferSize,
+                                           curTime,
+                                           0);
+            }
+
+            // free memory allocated by temporary buffer
+            delete tempBuffer;
+          } else {
+            if (bufidx >= 0) {
+              size_t bufsize;
+              auto buf = AMediaCodec_getInputBuffer(codec, bufidx, &bufsize);
+              memcpy(buf, cachedBuffer, bufferSize);
+              auto curTime = gettimeofday_sec();
+              AMediaCodec_queueInputBuffer(codec, bufidx, 0, bufferSize,
+                                           curTime,
+                                           0);
+            }
+          }
+
+          flushOutput(bufferIndex); // free allocated buffer memory
+
+// broadcast update
+          if (broadcastUpdate)
+            Notifier::broadcast(Notifications::RECORDED_SNIPPET_SAVED, savedSnippets);
+
+          ++savedSnippets;
         }
 
-        flushOutput( bufferIndex ); // free allocated buffer memory
 
-        // store output file in vector
-        writtenFile file;
-        file.path = outputFile;
-        file.size = writtenWAVSize;
-        outputFiles.push_back( file );
+/* internal methods */
 
-        // broadcast update
-        if ( broadcastUpdate )
-            Notifier::broadcast( Notifications::RECORDED_SNIPPET_SAVED, savedSnippets );
+        AudioBuffer *getCachedBuffer(int bufferIndex) {
+          return cachedBuffers.at((unsigned long) bufferIndex);
+        }
 
-        ++savedSnippets;
-    }
+        void flushOutput(int bufferIndex) {
+          AudioBuffer *cachedBuffer = getCachedBuffer(bufferIndex);
 
-    /* internal methods */
-
-    AudioBuffer* getCachedBuffer( int bufferIndex )
-    {
-        return cachedBuffers.at(( unsigned long ) bufferIndex );
-    }
-
-    void flushOutput( int bufferIndex )
-    {
-        AudioBuffer* cachedBuffer = getCachedBuffer( bufferIndex );
-
-        if ( cachedBuffer != nullptr )
+          if (cachedBuffer != nullptr)
             delete cachedBuffer;
 
-        cachedBuffers.at(( unsigned long ) bufferIndex ) = nullptr;
+          cachedBuffers.at((unsigned long) bufferIndex) = nullptr;
+        }
+
     }
-}
 
 } // E.O namespace MWEngine
